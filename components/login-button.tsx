@@ -3,9 +3,9 @@
 import * as React from 'react'
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
 
-import { cn } from '@/lib/utils'
-import { Button, type ButtonProps } from '@/components/ui/button'
-import { IconSpinner } from '@/components/ui/icons'
+import { cn } from ''lib/utils'' (see below for file content)
+import { Button, type ButtonProps } from ''components/ui/button'' (see below for file content)
+import { IconSpinner } from ''components/ui/icons'' (see below for file content)
 
 interface LoginButtonProps extends ButtonProps {
   showGoogleIcon?: boolean
@@ -59,9 +59,10 @@ export function LoginButton({
       variant="outline"
       onClick={async () => {
         setIsLoading(true)
+        const baseUrl = process.env.NEXT_PUBLIC_APP_URL || location.origin
         await supabase.auth.signInWithOAuth({
           provider: 'google',
-          options: { redirectTo: `${location.origin}/api/auth/callback` }
+          options: { redirectTo: `${baseUrl}/api/auth/callback` }
         })
       }}
       disabled={isLoading}
