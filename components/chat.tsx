@@ -1,7 +1,6 @@
 'use client'
 
 import { useChat, type Message } from 'ai/react'
-
 import { cn } from '@/lib/utils'
 import { ChatList } from '@/components/chat-list'
 import { ChatPanel } from '@/components/chat-panel'
@@ -16,10 +15,12 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { toast } from 'react-hot-toast'
+import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
+import { LoginButton } from './login-button'
 
 const IS_PREVIEW = process.env.VERCEL_ENV === 'preview'
 export interface ChatProps extends React.ComponentProps<'div'> {
@@ -34,6 +35,37 @@ export function Chat({ id, initialMessages, className }: ChatProps) {
   )
   const [previewTokenDialog, setPreviewTokenDialog] = useState(IS_PREVIEW)
   const [previewTokenInput, setPreviewTokenInput] = useState(previewToken ?? '')
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null)
+  const supabase = createClientComponentClient()
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession()
+        if (error) {
+          console.error('Error checking auth status:', error)
+          toast.error('Error checking authentication status')
+          setIsAuthenticated(false)
+          return
+        }
+        setIsAuthenticated(!!session)
+      } catch (error) {
+        console.error('Error in auth check:', error)
+        setIsAuthenticated(false)
+      }
+    }
+
+    checkAuth()
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setIsAuthenticated(!!session)
+    })
+
+    return () => {
+      subscription.unsubscribe()
+    }
+  }, [supabase.auth])
+
   const { messages, append, reload, stop, isLoading, input, setInput } =
     useChat({
       initialMessages,
@@ -44,10 +76,37 @@ export function Chat({ id, initialMessages, className }: ChatProps) {
       },
       onResponse(response) {
         if (response.status === 401) {
-          toast.error(response.statusText)
+          toast.error('Please sign in to use the chat')
+          setIsAuthenticated(false)
+        } else if (response.status === 500) {
+          toast.error('Server error. Please try again later')
+        } else if (!response.ok) {
+          toast.error('Failed to send message. Please try again')
         }
+      },
+      onError(error) {
+        toast.error(error.message || 'An error occurred. Please try again')
+        console.error('Chat error:', error)
       }
     })
+
+  if (isAuthenticated === null) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
+      </div>
+    )
+  }
+
+  if (isAuthenticated === false) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen space-y-4">
+        <p className="text-center text-lg">Please sign in to use the chat</p>
+        <LoginButton />
+      </div>
+    )
+  }
+
   return (
     <>
       <div className={cn('pb-[200px] pt-4 md:pt-10', className)}>
