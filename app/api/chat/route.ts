@@ -36,7 +36,7 @@ export async function POST(req: Request) {
   }
 
   const res = await openai.createChatCompletion({
-    model: '01-mini',
+    model: 'o1-mini',
     messages,
     temperature: 0.7,
     stream: true
