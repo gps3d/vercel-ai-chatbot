@@ -3,9 +3,9 @@
 import * as React from 'react'
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
 
-import { cn } from ''lib/utils'' (see below for file content)
-import { Button, type ButtonProps } from ''components/ui/button'' (see below for file content)
-import { IconSpinner } from ''components/ui/icons'' (see below for file content)
+import { cn } from 'lib/utils'
+import { Button, type ButtonProps } from 'components/ui/button'
+import { IconSpinner } from 'components/ui/icons'
 
 interface LoginButtonProps extends ButtonProps {
   showGoogleIcon?: boolean
