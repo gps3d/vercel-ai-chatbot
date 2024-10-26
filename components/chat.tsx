@@ -1,6 +1,6 @@
 'use client'
 
-import { useChat, type Message } from 'ai/react'
+import { useState, useEffect } from 'react'
 import { cn } from '@/lib/utils'
 import { ChatList } from '@/components/chat-list'
 import { ChatPanel } from '@/components/chat-panel'
@@ -15,7 +15,6 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog'
-import { useState, useEffect } from 'react'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { toast } from 'react-hot-toast'
@@ -23,16 +22,24 @@ import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
 import { LoginButton } from './login-button'
 
 const IS_PREVIEW = process.env.VERCEL_ENV === 'preview'
+
+export interface Message {
+  role: 'user' | 'assistant'
+  content: string
+}
+
 export interface ChatProps extends React.ComponentProps<'div'> {
   initialMessages?: Message[]
   id?: string
+  threadId?: string
 }
 
-export function Chat({ id, initialMessages, className }: ChatProps) {
-  const [previewToken, setPreviewToken] = useLocalStorage<string | null>(
-    'ai-token',
-    null
-  )
+export function Chat({ id, threadId: initialThreadId, initialMessages, className }: ChatProps) {
+  const [messages, setMessages] = useState<Message[]>(initialMessages || [])
+  const [input, setInput] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const [threadId, setThreadId] = useState<string | undefined>(initialThreadId)
+  const [previewToken, setPreviewToken] = useLocalStorage<string | null>('ai-token', null)
   const [previewTokenDialog, setPreviewTokenDialog] = useState(IS_PREVIEW)
   const [previewTokenInput, setPreviewTokenInput] = useState(previewToken ?? '')
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null)
@@ -66,29 +73,46 @@ export function Chat({ id, initialMessages, className }: ChatProps) {
     }
   }, [supabase.auth])
 
-  const { messages, append, reload, stop, isLoading, input, setInput } =
-    useChat({
-      initialMessages,
-      id,
-      body: {
-        id,
-        previewToken
-      },
-      onResponse(response) {
-        if (response.status === 401) {
-          toast.error('Please sign in to use the chat')
-          setIsAuthenticated(false)
-        } else if (response.status === 500) {
-          toast.error('Server error. Please try again later')
-        } else if (!response.ok) {
-          toast.error('Failed to send message. Please try again')
-        }
-      },
-      onError(error) {
-        toast.error(error.message || 'An error occurred. Please try again')
-        console.error('Chat error:', error)
+  const sendMessage = async (content: string) => {
+    setIsLoading(true)
+    const newMessages = [...messages, { role: 'user', content }]
+    setMessages(newMessages)
+
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          messages: newMessages,
+          threadId,
+          id,
+          previewToken
+        })
+      })
+
+      if (response.status === 401) {
+        toast.error('Please sign in to use the chat')
+        setIsAuthenticated(false)
+        setIsLoading(false)
+        return
       }
-    })
+
+      if (!response.ok) {
+        throw new Error(response.statusText)
+      }
+
+      const data = await response.json()
+      setThreadId(data.threadId)
+      setMessages([...newMessages, { role: 'assistant', content: data.content }])
+    } catch (error) {
+      toast.error('Failed to send message')
+      console.error('Chat error:', error)
+    } finally {
+      setIsLoading(false)
+    }
+  }
 
   if (isAuthenticated === null) {
     return (
@@ -122,9 +146,12 @@ export function Chat({ id, initialMessages, className }: ChatProps) {
       <ChatPanel
         id={id}
         isLoading={isLoading}
-        stop={stop}
-        append={append}
-        reload={reload}
+        stop={() => setIsLoading(false)}
+        append={sendMessage}
+        reload={() => {
+          setMessages([])
+          setThreadId(undefined)
+        }}
         messages={messages}
         input={input}
         setInput={setInput}

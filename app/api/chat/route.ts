@@ -1,6 +1,5 @@
 import 'server-only'
-import { OpenAIStream, StreamingTextResponse } from 'ai'
-import { Configuration, OpenAIApi } from 'openai-edge'
+import OpenAI from 'openai'
 import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs'
 import { cookies } from 'next/headers'
 import { Database } from '@/lib/db_types'
@@ -9,16 +8,13 @@ import { nanoid } from '@/lib/utils'
 
 export const runtime = 'edge'
 
-const configuration = new Configuration({
+const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 })
-
-const openai = new OpenAIApi(configuration)
 
 export async function POST(req: Request) {
   try {
     console.log('Chat API: Starting request processing')
-    console.log('OpenAI API Key exists:', !!process.env.OPENAI_API_KEY)
 
     const cookieStore = cookies()
     const supabase = createRouteHandlerClient<Database>({
@@ -26,7 +22,7 @@ export async function POST(req: Request) {
     })
 
     const json = await req.json()
-    const { messages, previewToken } = json
+    const { messages, threadId } = json
     
     try {
       console.log('Chat API: Checking authentication')
@@ -38,74 +34,78 @@ export async function POST(req: Request) {
         })
       }
       const userId = session.user.id
-      console.log('Chat API: User authenticated:', userId)
 
-      const apiKey = previewToken || process.env.OPENAI_API_KEY
-      if (!apiKey) {
-        console.log('Chat API: No API key available')
-        return new Response('OpenAI API key not configured', {
+      if (!process.env.OPENAI_ASSISTANT_ID) {
+        return new Response('OpenAI Assistant ID not configured', {
           status: 500
         })
       }
 
-      console.log('Chat API: Making OpenAI request')
-      const res = await openai.createChatCompletion({
-        model: 'gpt-4o-mini',
-        messages,
-        temperature: 0.7,
-        stream: true
+      // Create or retrieve thread
+      const thread = threadId 
+        ? await openai.beta.threads.retrieve(threadId)
+        : await openai.beta.threads.create()
+
+      // Add the new message to thread
+      await openai.beta.threads.messages.create(thread.id, {
+        role: 'user',
+        content: messages[messages.length - 1].content
       })
 
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => null)
-        console.error('Chat API: OpenAI request failed', errorData)
-        return new Response(
-          JSON.stringify({ error: 'OpenAI request failed', details: errorData }), 
-          { status: res.status }
-        )
+      // Run the assistant
+      const run = await openai.beta.threads.runs.create(thread.id, {
+        assistant_id: process.env.OPENAI_ASSISTANT_ID
+      })
+
+      // Poll for completion
+      let runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id)
+      while (runStatus.status === 'queued' || runStatus.status === 'in_progress') {
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id)
       }
 
-      const stream = OpenAIStream(res, {
-        async onCompletion(completion) {
-          try {
-            const chatId = json.id ?? nanoid()
-            const title = json.messages[0].content.substring(0, 100)
-            const createdAt = Date.now()
-            const path = `/chat/${chatId}`
+      if (runStatus.status === 'completed') {
+        // Get messages after run completion
+        const messagesList = await openai.beta.threads.messages.list(thread.id)
+        const lastMessage = messagesList.data[0]
 
-            // Structure the payload according to the database schema
-            const chatData = {
-              id: chatId,
-              user_id: userId,
-              payload: {
-                title,
-                createdAt,
-                path,
-                messages: [
-                  ...messages,
-                  {
-                    content: completion,
-                    role: 'assistant'
-                  }
-                ]
+        // Save to database
+        const chatId = json.id ?? nanoid()
+        const title = messages[0].content.substring(0, 100)
+        const createdAt = Date.now()
+        const path = `/chat/${chatId}`
+
+        const chatData = {
+          id: chatId,
+          user_id: userId,
+          payload: {
+            title,
+            createdAt,
+            path,
+            threadId: thread.id,
+            messages: [
+              ...messages,
+              {
+                role: 'assistant',
+                content: lastMessage.content[0].text.value
               }
-            }
-
-            // Insert chat into database using the correct structure
-            await supabase
-              .from('chats')
-              .upsert(chatData)
-              .throwOnError()
-
-            console.log('Chat API: Successfully saved chat to database')
-          } catch (error) {
-            console.error('Chat API: Error saving chat to database:', error)
+            ]
           }
         }
-      })
 
-      console.log('Chat API: Successfully created response stream')
-      return new StreamingTextResponse(stream)
+        await supabase
+          .from('chats')
+          .upsert(chatData)
+          .throwOnError()
+
+        return new Response(JSON.stringify({
+          role: 'assistant',
+          content: lastMessage.content[0].text.value,
+          threadId: thread.id
+        }))
+      } else {
+        return new Response('Assistant run failed', { status: 500 })
+      }
     } catch (authError) {
       console.error('Chat API: Authentication error:', authError)
       return new Response(
