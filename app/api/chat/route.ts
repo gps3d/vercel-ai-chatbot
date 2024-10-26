@@ -50,7 +50,7 @@ export async function POST(req: Request) {
 
       console.log('Chat API: Making OpenAI request')
       const res = await openai.createChatCompletion({
-        model: 'o1-mini',
+        model: 'gpt-4o-mini',
         messages,
         temperature: 0.7,
         stream: true
